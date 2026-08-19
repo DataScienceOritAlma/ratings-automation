@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+inbox/
+results/
+webapp/feedback.md
+דוגמה של ה */
+*.xlsx
+!requirements.txt
