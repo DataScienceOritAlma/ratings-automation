@@ -52,6 +52,7 @@ st.markdown("""
 
 FEEDBACK_FILE = os.path.join(PROJECT_ROOT, "webapp", "feedback.md")
 DOWNLOADS_DIR = os.path.join(PROJECT_ROOT, "results")
+TEMPLATE_TARGET = os.path.join(PROJECT_ROOT, "webapp", "template.xlsx")
 CHANNELS = {
     11: ("KAN 11", (17, 18, 19)),
     12: ("קשת 12", (24, 25, 26)),
@@ -165,10 +166,9 @@ with st.sidebar:
     st.markdown("### 📖 הוראות שימוש")
     st.markdown("""
     1. העלי את קובץ המקור (PreliminaryProgramsReport)
-    2. העלי את קובץ היעד (עם לשונית "לוח")
-    3. לחצי על "עבד קבצים"
-    4. ערכי את התוצאה בטבלה למטה (אופציונלי)
-    5. הורידי את הקובץ המעודכן
+    2. לחצי על "עבד קבצים"
+    3. ערכי את התוצאה בטבלה למטה (אופציונלי)
+    4. הורידי את הקובץ המעודכן
     """)
     st.markdown("---")
     st.markdown("### 💬 יש הצעה?")
@@ -187,41 +187,48 @@ tab_upload, tab_edit, tab_feedback, tab_rules, tab_downloads = st.tabs([
 
 # --- Tab 1: העלאה ועיבוד ---
 with tab_upload:
-    st.subheader("שלב 1: העלאת קבצים")
-    col1, col2 = st.columns(2)
+    st.subheader("שלב 1: העלאת קובץ המקור")
+    st.markdown("**קובץ מקור (Preliminary)**")
+    source_file = st.file_uploader(
+        "בחרי קובץ PreliminaryProgramsReport",
+        type=["xlsx", "xls"],
+        key="source_upload",
+        help="הקובץ עם הגיליונות KAN / Keshet 12 / Reshet 13 / Arutz14",
+    )
 
-    with col1:
-        st.markdown("**קובץ מקור (Preliminary)**")
-        source_file = st.file_uploader(
-            "בחרי קובץ PreliminaryProgramsReport",
-            type=["xlsx", "xls"],
-            key="source_upload",
-            help="הקובץ עם הגיליונות KAN / Keshet 12 / Reshet 13 / Arutz14",
+    with st.expander("⚙️ קובץ יעד (אופציונלי - יש תבנית שמורה)", expanded=False):
+        st.markdown(
+            "כברירת מחדל האפליקציה משתמשת בתבנית שמורה של קובץ הלוח. "
+            "אם את רוצה להשתמש בקובץ יעד ספציפי (למשל קובץ יומי אחר), העלי אותו כאן:"
         )
-
-    with col2:
-        st.markdown("**קובץ יעד (עם לשונית 'לוח')**")
         target_file = st.file_uploader(
-            "בחרי את הקובץ שיש בו את לשונית 'לוח'",
+            "קובץ יעד עם לשונית 'לוח'",
             type=["xlsx"],
             key="target_upload",
-            help="הקובץ הרייטינג היומי - יש בו לשונית 'לוח' עם עמודות התחלה/סיום/שם",
         )
 
     st.markdown("---")
 
-    if st.button("🚀 עבד קבצים", type="primary", disabled=not (source_file and target_file)):
+    if st.button("🚀 עבד קבצים", type="primary", disabled=not source_file):
         with st.spinner("מעבד..."):
             try:
                 # שמירה זמנית של הקבצים
                 tmpdir = tempfile.mkdtemp()
                 src_path = os.path.join(tmpdir, source_file.name)
-                tgt_path = os.path.join(tmpdir, target_file.name)
+                target_filename = target_file.name if target_file else "לוח.xlsx"
+                tgt_path = os.path.join(tmpdir, target_filename)
 
                 with open(src_path, "wb") as f:
                     f.write(source_file.getbuffer())
-                with open(tgt_path, "wb") as f:
-                    f.write(target_file.getbuffer())
+                if target_file:
+                    with open(tgt_path, "wb") as f:
+                        f.write(target_file.getbuffer())
+                else:
+                    # אין קובץ יעד - משתמשים בתבנית השמורה
+                    if not os.path.exists(TEMPLATE_TARGET):
+                        st.error(f"לא נמצאה תבנית שמורה: {TEMPLATE_TARGET}")
+                        st.stop()
+                    shutil.copy2(TEMPLATE_TARGET, tgt_path)
 
                 # המרת .xls ל-.xlsx אם צריך
                 if src_path.lower().endswith(".xls"):
@@ -253,7 +260,7 @@ with tab_upload:
                 st.session_state["dfs"] = dfs
                 st.session_state["target_path"] = tgt_path
                 st.session_state["source_filename"] = source_file.name
-                st.session_state["target_filename"] = target_file.name
+                st.session_state["target_filename"] = target_filename
                 st.session_state["tmpdir"] = tmpdir
 
                 st.success(f"✅ עובד בהצלחה! מעבירה אותך ללשונית 'עריכה והורדה'")
@@ -293,9 +300,9 @@ with tab_edit:
         st.markdown("---")
         st.subheader("הורדה")
 
-        # שם קובץ הפלט
-        base = os.path.splitext(st.session_state.get("target_filename", "לוח.xlsx"))[0]
-        default_output = f"{base}_V1.xlsx"
+        # שם קובץ הפלט - ברירת מחדל: תאריך היום
+        today_short = date.today().strftime("%d.%m.%Y")
+        default_output = f"{today_short}.xlsx"
         output_name = st.text_input("שם קובץ הפלט:", value=default_output)
 
         if st.button("💾 שמור והורד", type="primary"):
