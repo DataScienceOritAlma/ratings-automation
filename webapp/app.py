@@ -17,6 +17,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS_DIR = os.path.join(PROJECT_ROOT, "scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 import update_luach as U  # noqa: E402
+import asrun as A  # noqa: E402
 
 
 # --- הגדרות ---
@@ -52,6 +53,7 @@ st.markdown("""
 
 FEEDBACK_FILE = os.path.join(PROJECT_ROOT, "webapp", "feedback.md")
 DOWNLOADS_DIR = os.path.join(PROJECT_ROOT, "results")
+TEMPLATE_TARGET = os.path.join(PROJECT_ROOT, "webapp", "template.xlsx")
 CHANNELS = {
     11: ("KAN 11", (17, 18, 19)),
     12: ("קשת 12", (24, 25, 26)),
@@ -108,8 +110,11 @@ def process_files(source_path, target_path):
     return dfs
 
 
-def apply_edits_to_target(target_path, edited_dfs, output_path):
-    """מקבל את הקובץ המקורי, מיישם עליו את העריכות מהממשק, ושומר לפלט."""
+def apply_edits_to_target(target_path, edited_dfs, output_path,
+                          breaks_by_channel=None, asrun_programs=None, asrun_gaps=None):
+    """מקבל את הקובץ המקורי, מיישם עליו את העריכות מהממשק, ושומר לפלט.
+    אם breaks_by_channel סופק - גם מעדכן את לשונית ברייקים.
+    אם asrun_programs/gaps סופקו - גם ממלא את i24 (לוח A-C + ברייקים 'ערוץ שלנו')."""
     shutil.copy2(target_path, output_path)
     wb = openpyxl.load_workbook(output_path)
     ws = U.find_target_sheet(wb)
@@ -129,6 +134,27 @@ def apply_edits_to_target(target_path, edited_dfs, output_path):
         # ניקוי + כתיבה
         U.clear_channel_columns(ws, cols, max(ws.max_row, 60))
         U.write_programs(ws, cols, programs)
+
+    # ברייקים (אם יש)
+    if breaks_by_channel:
+        ws_breaks = U.find_breaks_sheet(wb)
+        if ws_breaks is not None:
+            max_break_row = max(ws_breaks.max_row, 100)
+            for chan, cols in U.TARGET_BREAKS_COLS_BY_CHANNEL.items():
+                breaks = breaks_by_channel.get(chan, [])
+                U.clear_breaks_channel_columns(ws_breaks, cols, max_break_row)
+                U.write_breaks(ws_breaks, cols, breaks)
+
+    # AsRun של i24 (אם יש)
+    if asrun_programs:
+        U.clear_asrun_luach_columns(ws, max(ws.max_row, 100))
+        U.write_asrun_programs(ws, asrun_programs)
+    if asrun_gaps:
+        ws_breaks = U.find_breaks_sheet(wb)
+        if ws_breaks is not None:
+            max_break_row = max(ws_breaks.max_row, 100)
+            U.clear_breaks_channel_columns(ws_breaks, U.TARGET_ASRUN_BREAKS_COLS, max_break_row)
+            U.write_breaks(ws_breaks, U.TARGET_ASRUN_BREAKS_COLS, asrun_gaps)
 
     wb.save(output_path)
 
@@ -159,16 +185,15 @@ st.markdown("""
 # --- Sidebar ---
 with st.sidebar:
     st.header("⚙️ הגדרות")
-    today_str = date.today().strftime("%d.%m.%Y")
-    st.markdown(f"**תאריך היום:** {today_str}")
+    data_date_str = (date.today() - timedelta(days=1)).strftime("%d.%m.%Y")
+    st.markdown(f"**תאריך הנתונים (אתמול):** {data_date_str}")
     st.markdown("---")
     st.markdown("### 📖 הוראות שימוש")
     st.markdown("""
     1. העלי את קובץ המקור (PreliminaryProgramsReport)
-    2. העלי את קובץ היעד (עם לשונית "לוח")
-    3. לחצי על "עבד קבצים"
-    4. ערכי את התוצאה בטבלה למטה (אופציונלי)
-    5. הורידי את הקובץ המעודכן
+    2. לחצי על "עבד קבצים"
+    3. ערכי את התוצאה בטבלה למטה (אופציונלי)
+    4. הורידי את הקובץ המעודכן
     """)
     st.markdown("---")
     st.markdown("### 💬 יש הצעה?")
@@ -187,41 +212,58 @@ tab_upload, tab_edit, tab_feedback, tab_rules, tab_downloads = st.tabs([
 
 # --- Tab 1: העלאה ועיבוד ---
 with tab_upload:
-    st.subheader("שלב 1: העלאת קבצים")
+    st.subheader("שלב 1: העלאת קבצי מקור")
     col1, col2 = st.columns(2)
-
     with col1:
-        st.markdown("**קובץ מקור (Preliminary)**")
+        st.markdown("**קובץ Preliminary (KAN/קשת/רשת/ערוץ 14)**")
         source_file = st.file_uploader(
             "בחרי קובץ PreliminaryProgramsReport",
             type=["xlsx", "xls"],
             key="source_upload",
             help="הקובץ עם הגיליונות KAN / Keshet 12 / Reshet 13 / Arutz14",
         )
-
     with col2:
-        st.markdown("**קובץ יעד (עם לשונית 'לוח')**")
+        st.markdown("**קובץ AsRun של i24 (ערוץ שלנו) - אופציונלי**")
+        asrun_file = st.file_uploader(
+            "בחרי קובץ AsRun (TXT)",
+            type=["txt"],
+            key="asrun_upload",
+            help="קובץ ה-log של i24 - יעדכן את עמודות A-C בלוח ואת בלוק 'ערוץ שלנו' בברייקים",
+        )
+
+    with st.expander("⚙️ קובץ יעד (אופציונלי - יש תבנית שמורה)", expanded=False):
+        st.markdown(
+            "כברירת מחדל האפליקציה משתמשת בתבנית שמורה של קובץ הלוח. "
+            "אם את רוצה להשתמש בקובץ יעד ספציפי (למשל קובץ יומי אחר), העלי אותו כאן:"
+        )
         target_file = st.file_uploader(
-            "בחרי את הקובץ שיש בו את לשונית 'לוח'",
+            "קובץ יעד עם לשונית 'לוח'",
             type=["xlsx"],
             key="target_upload",
-            help="הקובץ הרייטינג היומי - יש בו לשונית 'לוח' עם עמודות התחלה/סיום/שם",
         )
 
     st.markdown("---")
 
-    if st.button("🚀 עבד קבצים", type="primary", disabled=not (source_file and target_file)):
+    if st.button("🚀 עבד קבצים", type="primary", disabled=not source_file):
         with st.spinner("מעבד..."):
             try:
                 # שמירה זמנית של הקבצים
                 tmpdir = tempfile.mkdtemp()
                 src_path = os.path.join(tmpdir, source_file.name)
-                tgt_path = os.path.join(tmpdir, target_file.name)
+                target_filename = target_file.name if target_file else "לוח.xlsx"
+                tgt_path = os.path.join(tmpdir, target_filename)
 
                 with open(src_path, "wb") as f:
                     f.write(source_file.getbuffer())
-                with open(tgt_path, "wb") as f:
-                    f.write(target_file.getbuffer())
+                if target_file:
+                    with open(tgt_path, "wb") as f:
+                        f.write(target_file.getbuffer())
+                else:
+                    # אין קובץ יעד - משתמשים בתבנית השמורה
+                    if not os.path.exists(TEMPLATE_TARGET):
+                        st.error(f"לא נמצאה תבנית שמורה: {TEMPLATE_TARGET}")
+                        st.stop()
+                    shutil.copy2(TEMPLATE_TARGET, tgt_path)
 
                 # המרת .xls ל-.xlsx אם צריך
                 if src_path.lower().endswith(".xls"):
@@ -250,10 +292,24 @@ with tab_upload:
 
                 # עיבוד
                 dfs = process_files(src_path, tgt_path)
+                breaks = U.read_breaks_from_source(src_path)
+
+                # AsRun (i24) - אם הועלה
+                asrun_programs = []
+                asrun_gaps = []
+                if asrun_file is not None:
+                    asrun_path = os.path.join(tmpdir, asrun_file.name)
+                    with open(asrun_path, "wb") as f:
+                        f.write(asrun_file.getbuffer())
+                    asrun_programs, asrun_gaps = A.parse_asrun_file(asrun_path)
+
                 st.session_state["dfs"] = dfs
+                st.session_state["breaks"] = breaks
+                st.session_state["asrun_programs"] = asrun_programs
+                st.session_state["asrun_gaps"] = asrun_gaps
                 st.session_state["target_path"] = tgt_path
                 st.session_state["source_filename"] = source_file.name
-                st.session_state["target_filename"] = target_file.name
+                st.session_state["target_filename"] = target_filename
                 st.session_state["tmpdir"] = tmpdir
 
                 st.success(f"✅ עובד בהצלחה! מעבירה אותך ללשונית 'עריכה והורדה'")
@@ -262,7 +318,9 @@ with tab_upload:
                 # תצוגה מקדימה מהירה
                 st.markdown("### תצוגה מקדימה:")
                 for chan, (chan_name, _) in CHANNELS.items():
-                    st.markdown(f"**{chan_name}** ({len(dfs[chan])} שורות)")
+                    st.markdown(f"**{chan_name}** — {len(dfs[chan])} שורות בלוח, {len(breaks.get(chan, []))} ברייקים")
+                if asrun_programs or asrun_gaps:
+                    st.markdown(f"**ערוץ שלנו (i24)** — {len(asrun_programs)} תוכניות, {len(asrun_gaps)} פערים")
 
             except Exception as e:
                 st.error(f"אירעה שגיאה: {e}")
@@ -293,16 +351,21 @@ with tab_edit:
         st.markdown("---")
         st.subheader("הורדה")
 
-        # שם קובץ הפלט
-        base = os.path.splitext(st.session_state.get("target_filename", "לוח.xlsx"))[0]
-        default_output = f"{base}_V1.xlsx"
+        # שם קובץ הפלט - ברירת מחדל: תאריך הנתונים (אתמול, היום שאליו מתייחס הדו"ח)
+        data_date = (date.today() - timedelta(days=1)).strftime("%d.%m.%Y")
+        default_output = f"{data_date}.xlsx"
         output_name = st.text_input("שם קובץ הפלט:", value=default_output)
 
         if st.button("💾 שמור והורד", type="primary"):
             try:
                 output_path = os.path.join(st.session_state["tmpdir"], output_name)
                 apply_edits_to_target(
-                    st.session_state["target_path"], edited_dfs, output_path
+                    st.session_state["target_path"],
+                    edited_dfs,
+                    output_path,
+                    breaks_by_channel=st.session_state.get("breaks"),
+                    asrun_programs=st.session_state.get("asrun_programs"),
+                    asrun_gaps=st.session_state.get("asrun_gaps"),
                 )
                 with open(output_path, "rb") as f:
                     file_bytes = f.read()

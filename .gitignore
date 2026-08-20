@@ -7,3 +7,4 @@ webapp/feedback.md
 דוגמה של ה */
 *.xlsx
 !requirements.txt
+!webapp/template.xlsx

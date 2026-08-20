@@ -44,6 +44,33 @@ TARGET_COLS_BY_CHANNEL = {
 TARGET_SHEET_NAME = "לוח"
 FIRST_DATA_ROW = 2  # שורה 1 היא כותרות
 
+# --- ברייקים ---
+# שם גיליון בקובץ המקור עבור ברייקים של כל ערוץ
+SOURCE_BREAKS_SHEET_TO_CHANNEL = {
+    "KAN Breaks":       11,
+    "Keshet 12 Breaks": 12,
+    "Reshet 13 Breaks": 13,
+    "Arutz14 Breaks":   14,
+}
+
+# עמודות בלשונית 'ברייקים' של קובץ היעד: (Start, End, התחלה, סיום, משך) לכל ערוץ
+TARGET_BREAKS_COLS_BY_CHANNEL = {
+    11: (1, 2, 3, 4, 5),
+    12: (7, 8, 9, 10, 11),
+    13: (13, 14, 15, 16, 17),
+    14: (19, 20, 21, 22, 23),
+    # 25-29 שמור לבלוק 'ערוץ שלנו' שלא מגיע מ-Preliminary
+}
+
+TARGET_BREAKS_SHEET_NAME = "ברייקים"
+FIRST_BREAK_DATA_ROW = 3  # שורות 1-2 בגיליון היעד הן כותרות
+
+# --- AsRun (i24 / ערוץ שלנו) ---
+# תוכניות i24 נכתבות לעמודות A-B-C בלשונית 'לוח' (התחלה/סיום/טבלת אזרן מלא)
+TARGET_ASRUN_LUACH_COLS = (1, 2, 3)  # start_col, end_col, title_col
+# פערי i24 (ברייקים) נכתבים לבלוק 'ערוץ שלנו' בלשונית 'ברייקים' - עמודות 25-29
+TARGET_ASRUN_BREAKS_COLS = (25, 26, 27, 28, 29)
+
 # חלון זמן שבו מתחילה המהדורה המרכזית של הערב (לזיהוי אוטומטי + הדגשה בבולד)
 MAIN_NEWS_START = timedelta(hours=19, minutes=30)
 MAIN_NEWS_END   = timedelta(hours=20, minutes=15)
@@ -346,6 +373,29 @@ def rename_israel_headlines(programs):
     return result
 
 
+# ברשת 13: תוכנית 'HAOLAM HABOKER' שמתחילה לפני 07:00 היא 'רגע לפני'
+# (המקדים של העולם הבוקר). חלק מגרסאות המקור לא כוללות את הסיומת REGA LEFNEY,
+# ואז שתי הפעימות מקבלות אותו שם ומתאחדות. הפונקציה מתייגת מראש כדי למנוע זאת.
+REGA_LEFNEY_CUTOFF = timedelta(hours=7)
+
+
+def mark_reshet_regalefney_by_time(programs):
+    """
+    לפני האיחוד: אם שם התוכנית מכיל 'HAOLAM HABOKER' והיא מתחילה לפני 07:00,
+    מתייג אותה בשם המלא 'HAOLAM HABOKER REGA LEFNEY' כדי שתתורגם ל'רגע לפני'
+    ולא תתאחד עם 'העולם הבוקר' של אחרי 07:00.
+    רץ רק על רשת 13.
+    """
+    result = []
+    for start, end, name in programs:
+        if name and start is not None and start < REGA_LEFNEY_CUTOFF:
+            s = str(name).upper()
+            if "HAOLAM HABOKER" in s and "LEFNEY" not in s and "LIFNEY" not in s:
+                name = "HAOLAM HABOKER REGA LEFNEY"
+        result.append((start, end, name))
+    return result
+
+
 def translate_reshet_name(clean_name):
     """מתרגם שם תוכנית של רשת 13 מתעתיק אנגלי לעברית לפי מילון RESHET_TRANSLATIONS."""
     if not clean_name or clean_name == RERUN_LABEL:
@@ -414,6 +464,67 @@ def floor_end_minute(td):
     if total_s < 0:
         return td
     return timedelta(minutes=total_s // 60)
+
+
+CONSOLIDATE_INTERRUPTION_MAX = timedelta(minutes=20)
+
+
+def consolidate_split_protected_shows(programs, max_span_hours=3):
+    """
+    מאחדת תוכנית מוגנת שהתפצלה בגלל שידור אחר קצר באמצע.
+    לדוגמה: 'מהדורת בוקר 09:35-10:30' + 'הפרעה 10:35-10:50' + 'מהדורת בוקר 11:05-12:00'
+    -> 'מהדורת בוקר 09:35-12:00' (ההפרעה הקצרה נמחקת).
+    לא מאחדים אם יש באמצע תוכנית של 20+ דקות (הפרעה 'משמעותית' - נשארת בנפרד).
+    max_span_hours: מרחק מקסימלי בין ההתחלה של המופע הראשון לסיום של האחרון.
+    לא חל על מרכזית ושידורים חוזרים.
+    """
+    excluded = {MAIN_NEWS_LABEL, RERUN_LABEL}
+
+    def is_long_interruption(s, e):
+        if s is None or e is None:
+            return False
+        d = e - s
+        if d.total_seconds() < 0:
+            d += timedelta(hours=24)
+        return d >= CONSOLIDATE_INTERRUPTION_MAX
+
+    result = []
+    skip = set()
+    for i in range(len(programs)):
+        if i in skip:
+            continue
+        s1, e1, n1 = programs[i]
+        n1_clean = str(n1).strip() if n1 else ""
+        if (n1_clean not in PROTECTED_SHOWS
+                or n1_clean in excluded
+                or s1 is None):
+            result.append(programs[i])
+            continue
+        # מחפשים את המופע האחרון של אותו שם בחלון, כל עוד ההפרעות ביניים קצרות מ-20 דק'
+        last_j = i
+        for j in range(i + 1, len(programs)):
+            if j in skip:
+                continue
+            s2, e2, n2 = programs[j]
+            if s2 is None:
+                continue
+            span_hours = (s2 - s1).total_seconds() / 3600
+            if span_hours > max_span_hours:
+                break
+            name_j = str(n2).strip()
+            if name_j == n1_clean:
+                last_j = j
+            elif is_long_interruption(s2, e2):
+                # תוכנית באמצע ארוכה מדי - עוצרים כאן (לא ממשיכים לאחד מעבר לה)
+                break
+        if last_j != i:
+            merged_end = programs[last_j][1] if programs[last_j][1] is not None else e1
+            result.append((s1, merged_end, n1))
+            for k in range(i + 1, last_j + 1):
+                skip.add(k)
+        else:
+            result.append(programs[i])
+    return result
 
 
 def merge_same_named_adjacent(programs, max_gap_minutes=2):
@@ -517,6 +628,23 @@ def resolve_coded_names(programs):
                 if s.startswith(prefix):
                     name = real_name
                     break
+        result.append((start, end, name))
+    return result
+
+
+def filter_zero_duration(programs):
+    """
+    מסירה שורות עם משך אפס (start == end או end לפני start באותו זמן).
+    שורות כאלה הן מרקרים/פריווים במקור (למשל 'שבע עם 18:59-18:59')
+    שאסור להם להתאחד עם התוכנית האמיתית כי זה יזיז את שעת ההתחלה אחורה.
+    """
+    result = []
+    for start, end, name in programs:
+        if start is not None and end is not None:
+            diff = (end - start).total_seconds()
+            # < דקה נחשב 'ריק' (0, שניות בודדות)
+            if abs(diff) < 60:
+                continue
         result.append((start, end, name))
     return result
 
@@ -629,7 +757,16 @@ def read_programs_from_source(source_path):
         # 0. המרת קודים פנימיים לשם תוכנית אמיתי (למשל A187850_* -> גיא פינס)
         programs = resolve_coded_names(programs)
 
-        # 0ב. איחוד ראשוני של קטעים סמוכים עם אותו שם, לפני סינון תוכניות קצרות.
+        # 0א. מסירים מרקרים ריקים (משך אפס) לפני האיחוד -
+        #     מונע ששורת מרקר '18:59-18:59' תיצמד לתוכנית האמיתית ותזיז אחורה את ההתחלה.
+        programs = filter_zero_duration(programs)
+
+        # 0ב. לפני האיחוד ברשת 13: מתייגים 'HAOLAM HABOKER' מוקדם (לפני 07:00) כ-REGA LEFNEY
+        #     כדי שיהיה לו שם מובחן ולא יתאחד עם 'העולם הבוקר' של אחרי 07:00.
+        if channel_num == 13:
+            programs = mark_reshet_regalefney_by_time(programs)
+
+        # 0ג. איחוד ראשוני של קטעים סמוכים עם אותו שם, לפני סינון תוכניות קצרות.
         # מונע שקטעים של 'גיא פינס' (כל אחד ~7 דק') ייעלמו כי הם קצרים מ-10 דק'.
         programs = merge_same_named_adjacent(programs, max_gap_minutes=10)
 
@@ -681,6 +818,11 @@ def read_programs_from_source(source_path):
         n_before_merge = len(programs)
         programs = merge_same_named_adjacent(programs)
         n_merged = n_before_merge - len(programs)
+
+        # 10ב. איחוד תוכנית מוגנת שהתפצלה עם שידור אחר באמצע (עד 3 שעות בין המופעים).
+        # למשל: 'מהדורת בוקר 09:35-10:30' + הפרעה + 'מהדורת בוקר 11:05-12:00'
+        # -> 'מהדורת בוקר 09:35-12:00' (ההפרעה נמחקת).
+        programs = consolidate_split_protected_shows(programs)
 
         # 11. עיגול זמנים:
         #     - התחלה: עיגול לדקה הקרובה
@@ -787,6 +929,130 @@ def find_target_sheet(wb):
     raise ValueError(f"לא נמצאה לשונית בשם '{TARGET_SHEET_NAME}' בקובץ היעד")
 
 
+def find_breaks_sheet(wb):
+    """מוצא את לשונית 'ברייקים' בקובץ היעד."""
+    for name in wb.sheetnames:
+        if name.strip() == TARGET_BREAKS_SHEET_NAME or "ברייקים" in name:
+            return wb[name]
+    return None
+
+
+def clear_asrun_luach_columns(ws, max_row):
+    """מנקה את עמודות A-B-C בלשונית לוח (משורה 2 ומטה) - האזור של i24."""
+    for row in range(FIRST_DATA_ROW, max_row + 1):
+        for col in TARGET_ASRUN_LUACH_COLS:
+            ws.cell(row=row, column=col).value = None
+
+
+def write_asrun_programs(ws, programs):
+    """כותב תוכניות AsRun ללשונית לוח - עמודות A(התחלה) B(סיום) C(כותרת מלאה).
+    שומר על סגנון של שורת התבנית (שורה 2) לכל העמודות."""
+    start_col, end_col, title_col = TARGET_ASRUN_LUACH_COLS
+    tmpl_row = FIRST_DATA_ROW
+    template_fonts = {c: copy(ws.cell(row=tmpl_row, column=c).font) for c in TARGET_ASRUN_LUACH_COLS}
+    template_alignments = {c: copy(ws.cell(row=tmpl_row, column=c).alignment) for c in TARGET_ASRUN_LUACH_COLS}
+    template_formats = {c: ws.cell(row=tmpl_row, column=c).number_format for c in TARGET_ASRUN_LUACH_COLS}
+
+    def apply_style(cell, col):
+        cell.font = copy(template_fonts[col])
+        cell.alignment = copy(template_alignments[col])
+        if template_formats[col]:
+            cell.number_format = template_formats[col]
+
+    for i, (_id, start, end, title) in enumerate(programs):
+        row = FIRST_DATA_ROW + i
+        if start is not None:
+            c = ws.cell(row=row, column=start_col)
+            c.value = start
+            apply_style(c, start_col)
+            if not template_formats.get(start_col):
+                c.number_format = "[h]:mm:ss"
+        if end is not None:
+            c = ws.cell(row=row, column=end_col)
+            c.value = end
+            apply_style(c, end_col)
+            if not template_formats.get(end_col):
+                c.number_format = "[h]:mm:ss"
+        if title:
+            c = ws.cell(row=row, column=title_col)
+            c.value = title
+            apply_style(c, title_col)
+
+
+def read_breaks_from_source(source_path):
+    """קורא ברייקים מכל 4 גיליונות '<ערוץ> Breaks' של קובץ המקור.
+    מחזיר {channel_num: [(start_td, end_td), ...]} - ממויין לפי start."""
+    wb = openpyxl.load_workbook(source_path, data_only=True)
+    breaks = {}
+    for sheet_name, channel_num in SOURCE_BREAKS_SHEET_TO_CHANNEL.items():
+        if sheet_name not in wb.sheetnames:
+            breaks[channel_num] = []
+            continue
+        ws = wb[sheet_name]
+        rows = []
+        # מבנה עמודות: A=Program B=StartTime C=EndTime
+        # שומרים על סדר המקור (לא ממיינים) כדי להתאים למה שהיה בעבודה ידנית
+        for row in range(2, ws.max_row + 1):
+            start = parse_time(ws.cell(row=row, column=2).value)
+            end   = parse_time(ws.cell(row=row, column=3).value)
+            if start is None and end is None:
+                continue
+            rows.append((start, end))
+        breaks[channel_num] = rows
+    return breaks
+
+
+def clear_breaks_channel_columns(ws, cols, max_row):
+    """מנקה את 5 העמודות של ערוץ אחד בלשונית ברייקים (משורה 3 ומטה)."""
+    for row in range(FIRST_BREAK_DATA_ROW, max_row + 1):
+        for col in cols:
+            ws.cell(row=row, column=col).value = None
+
+
+def write_breaks(ws, cols, breaks):
+    """כותב ברייקים ללשונית - Start, End, התחלה, סיום, משך.
+    שומר על סגנון של השורה הראשונה של הנתונים (שורה 3) לכל שאר השורות."""
+    start_col, end_col, ht_col, si_col, mesh_col = cols
+
+    # שולפים סגנון-תבנית משורה 3 (הנתונים הראשונה)
+    tmpl_row = FIRST_BREAK_DATA_ROW
+    template_fonts = {c: copy(ws.cell(row=tmpl_row, column=c).font) for c in cols}
+    template_alignments = {c: copy(ws.cell(row=tmpl_row, column=c).alignment) for c in cols}
+    template_formats = {c: ws.cell(row=tmpl_row, column=c).number_format for c in cols}
+
+    def apply_style(cell, col):
+        cell.font = copy(template_fonts[col])
+        cell.alignment = copy(template_alignments[col])
+        if template_formats[col]:
+            cell.number_format = template_formats[col]
+
+    for i, (start, end) in enumerate(breaks):
+        row = FIRST_BREAK_DATA_ROW + i
+        # משך = end - start (אם חוצה חצות, מוסיפים 24 שעות)
+        duration = None
+        if start is not None and end is not None:
+            d = end - start
+            if d.total_seconds() < 0:
+                d += timedelta(hours=24)
+            duration = d
+
+        for col, val, default_fmt in (
+            (start_col, start, "hh:mm:ss"),
+            (end_col,   end,   "hh:mm:ss"),
+            (ht_col,    start, "[h]:mm"),
+            (si_col,    end,   "[h]:mm"),
+            (mesh_col,  duration, "[h]:mm:ss"),
+        ):
+            if val is None:
+                continue
+            c = ws.cell(row=row, column=col)
+            c.value = val
+            apply_style(c, col)
+            # רק אם לא היה פורמט קיים - נשתמש בברירת המחדל
+            if not template_formats.get(col):
+                c.number_format = default_fmt
+
+
 def backup_file(path):
     """יוצר גיבוי של הקובץ לפני שינוי."""
     base, ext = os.path.splitext(path)
@@ -799,6 +1065,7 @@ def backup_file(path):
 def update_luach(source_path, target_path, skip_backup=False):
     print(f"\n[קריאה] מקור: {os.path.basename(source_path)}")
     programs_by_channel = read_programs_from_source(source_path)
+    breaks_by_channel = read_breaks_from_source(source_path)
 
     if not skip_backup:
         print(f"\n[גיבוי] יוצר גיבוי לקובץ היעד...")
@@ -815,6 +1082,18 @@ def update_luach(source_path, target_path, skip_backup=False):
         print(f"  ערוץ {channel}: מנקה שורות ישנות ומכניס {len(programs)} תוכניות")
         clear_channel_columns(ws, cols, max_row)
         write_programs(ws, cols, programs)
+
+    # ברייקים
+    ws_breaks = find_breaks_sheet(wb)
+    if ws_breaks is not None:
+        max_break_row = max(ws_breaks.max_row, 100)
+        for channel, cols in TARGET_BREAKS_COLS_BY_CHANNEL.items():
+            breaks = breaks_by_channel.get(channel, [])
+            print(f"  ברייקים ערוץ {channel}: מנקה ומכניס {len(breaks)} ברייקים")
+            clear_breaks_channel_columns(ws_breaks, cols, max_break_row)
+            write_breaks(ws_breaks, cols, breaks)
+    else:
+        print("  [!] לא נמצאה לשונית 'ברייקים' בקובץ היעד - מדלגים על ברייקים")
 
     print(f"\n[שמירה] שומר קובץ...")
     wb.save(target_path)
