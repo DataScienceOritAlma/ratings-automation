@@ -68,6 +68,8 @@ FIRST_BREAK_DATA_ROW = 3  # שורות 1-2 בגיליון היעד הן כותר
 # --- AsRun (i24 / ערוץ שלנו) ---
 # תוכניות i24 נכתבות לעמודות A-B-C בלשונית 'לוח' (התחלה/סיום/טבלת אזרן מלא)
 TARGET_ASRUN_LUACH_COLS = (1, 2, 3)  # start_col, end_col, title_col
+# תוכניות i24 מקוצרות (עם מיזוגים + ש.ח) נכתבות ל-J-K-L (י24 NEWS)
+TARGET_ASRUN_LUACH_SHORT_COLS = (10, 11, 12)  # start_col, end_col, name_col
 # פערי i24 (ברייקים) נכתבים לבלוק 'ערוץ שלנו' בלשונית 'ברייקים' - עמודות 25-29
 TARGET_ASRUN_BREAKS_COLS = (25, 26, 27, 28, 29)
 
@@ -972,6 +974,51 @@ def clear_asrun_luach_columns(ws, max_row):
     for row in range(FIRST_DATA_ROW, max_row + 1):
         for col in TARGET_ASRUN_LUACH_COLS:
             ws.cell(row=row, column=col).value = None
+
+
+def clear_asrun_luach_short_columns(ws, max_row):
+    """מנקה את עמודות J-K-L (i24NEWS מקוצר) בלשונית לוח."""
+    for row in range(FIRST_DATA_ROW, max_row + 1):
+        for col in TARGET_ASRUN_LUACH_SHORT_COLS:
+            ws.cell(row=row, column=col).value = None
+
+
+def write_asrun_short_programs(ws, programs):
+    """כותב את הרשימה המקוצרת של i24 לעמודות J(התחלה) K(סיום) L(שם).
+    programs = רשימת (start_td, end_td, name) - כבר מעוגלת לדקה."""
+    start_col, end_col, name_col = TARGET_ASRUN_LUACH_SHORT_COLS
+    tmpl_row = FIRST_DATA_ROW
+    template_fonts = {c: copy(ws.cell(row=tmpl_row, column=c).font) for c in TARGET_ASRUN_LUACH_SHORT_COLS}
+    template_alignments = {c: copy(ws.cell(row=tmpl_row, column=c).alignment) for c in TARGET_ASRUN_LUACH_SHORT_COLS}
+    template_formats = {c: ws.cell(row=tmpl_row, column=c).number_format for c in TARGET_ASRUN_LUACH_SHORT_COLS}
+
+    def apply_style(cell, col, bold=False):
+        base_font = template_fonts[col]
+        cell.font = Font(name=base_font.name, size=base_font.size, color=base_font.color,
+                         bold=bold, italic=base_font.italic)
+        cell.alignment = copy(template_alignments[col])
+        if template_formats[col]:
+            cell.number_format = template_formats[col]
+
+    for i, (start, end, name) in enumerate(programs):
+        row = FIRST_DATA_ROW + i
+        is_main = is_main_news(start)
+        if start is not None:
+            c = ws.cell(row=row, column=start_col)
+            c.value = start
+            apply_style(c, start_col)
+            if not template_formats.get(start_col):
+                c.number_format = "[h]:mm"
+        if end is not None:
+            c = ws.cell(row=row, column=end_col)
+            c.value = end
+            apply_style(c, end_col)
+            if not template_formats.get(end_col):
+                c.number_format = "[h]:mm"
+        if name:
+            c = ws.cell(row=row, column=name_col)
+            c.value = name
+            apply_style(c, name_col, bold=is_main)
 
 
 def write_asrun_programs(ws, programs):

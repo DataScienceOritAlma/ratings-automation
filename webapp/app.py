@@ -111,10 +111,12 @@ def process_files(source_path, target_path):
 
 
 def apply_edits_to_target(target_path, edited_dfs, output_path,
-                          breaks_by_channel=None, asrun_programs=None, asrun_gaps=None):
+                          breaks_by_channel=None, asrun_programs=None, asrun_gaps=None,
+                          asrun_short=None):
     """מקבל את הקובץ המקורי, מיישם עליו את העריכות מהממשק, ושומר לפלט.
     אם breaks_by_channel סופק - גם מעדכן את לשונית ברייקים.
-    אם asrun_programs/gaps סופקו - גם ממלא את i24 (לוח A-C + ברייקים 'ערוץ שלנו')."""
+    אם asrun_programs/gaps סופקו - גם ממלא את i24 (לוח A-C + ברייקים 'ערוץ שלנו').
+    אם asrun_short סופק - גם ממלא את הלוח המקוצר של i24 (עמודות J-K-L)."""
     shutil.copy2(target_path, output_path)
     wb = openpyxl.load_workbook(output_path)
     ws = U.find_target_sheet(wb)
@@ -149,6 +151,9 @@ def apply_edits_to_target(target_path, edited_dfs, output_path,
     if asrun_programs:
         U.clear_asrun_luach_columns(ws, max(ws.max_row, 100))
         U.write_asrun_programs(ws, asrun_programs)
+    if asrun_short:
+        U.clear_asrun_luach_short_columns(ws, max(ws.max_row, 100))
+        U.write_asrun_short_programs(ws, asrun_short)
     if asrun_gaps:
         ws_breaks = U.find_breaks_sheet(wb)
         if ws_breaks is not None:
@@ -297,16 +302,19 @@ with tab_upload:
                 # AsRun (i24) - אם הועלה
                 asrun_programs = []
                 asrun_gaps = []
+                asrun_short = []
                 if asrun_file is not None:
                     asrun_path = os.path.join(tmpdir, asrun_file.name)
                     with open(asrun_path, "wb") as f:
                         f.write(asrun_file.getbuffer())
                     asrun_programs, asrun_gaps = A.parse_asrun_file(asrun_path)
+                    asrun_short = A.consolidate_asrun_for_luach(asrun_programs)
 
                 st.session_state["dfs"] = dfs
                 st.session_state["breaks"] = breaks
                 st.session_state["asrun_programs"] = asrun_programs
                 st.session_state["asrun_gaps"] = asrun_gaps
+                st.session_state["asrun_short"] = asrun_short
                 st.session_state["target_path"] = tgt_path
                 st.session_state["source_filename"] = source_file.name
                 st.session_state["target_filename"] = target_filename
@@ -368,6 +376,7 @@ with tab_edit:
                     breaks_by_channel=st.session_state.get("breaks"),
                     asrun_programs=st.session_state.get("asrun_programs"),
                     asrun_gaps=st.session_state.get("asrun_gaps"),
+                    asrun_short=st.session_state.get("asrun_short"),
                 )
                 with open(output_path, "rb") as f:
                     file_bytes = f.read()
