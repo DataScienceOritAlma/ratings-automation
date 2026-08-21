@@ -351,9 +351,11 @@ with tab_edit:
         st.markdown("---")
         st.subheader("הורדה")
 
-        # שם קובץ הפלט - ברירת מחדל: תאריך הנתונים (אתמול, היום שאליו מתייחס הדו"ח)
+        # שם קובץ הפלט - ברירת מחדל: תאריך הנתונים (אתמול) + סיומת V
+        # V מתקדם אוטומטית לפי כמה קבצים כבר נשמרו בסשן הנוכחי
         data_date = (date.today() - timedelta(days=1)).strftime("%d.%m.%Y")
-        default_output = f"{data_date}.xlsx"
+        v_num = len(st.session_state.get("downloads", [])) + 1
+        default_output = f"{data_date}_V{v_num}.xlsx"
         output_name = st.text_input("שם קובץ הפלט:", value=default_output)
 
         if st.button("💾 שמור והורד", type="primary"):
