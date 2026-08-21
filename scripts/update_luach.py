@@ -902,7 +902,7 @@ def read_programs_from_source(source_path):
 
 # פרמטרים לכלל "התחלה אחרי ברייק פתיחה"
 OPENING_BREAK_MIN_MINUTES = 5   # ברייק פחות מזה - לא נחשב "פתיחה משמעותית"
-OPENING_BREAK_WINDOW_MIN = 15   # מחפשים ברייק פתיחה רק ב-15 הדק' הראשונות של התוכנית
+OPENING_BREAK_WINDOW_MIN = 3    # ברייק שמתחיל בתוך 3 דק' הראשונות של התוכנית = פתיחה
 OPENING_BREAK_TOLERANCE_MIN = 2 # מרווח סבילות אם הברייק מתחיל דקה-שתיים לפני התוכנית (עיגול)
 
 
@@ -1195,6 +1195,13 @@ def update_luach(source_path, target_path, skip_backup=False):
     print(f"\n[קריאה] מקור: {os.path.basename(source_path)}")
     programs_by_channel = read_programs_from_source(source_path)
     breaks_by_channel = read_breaks_from_source(source_path)
+
+    # כלל "התחלה אחרי ברייק פתיחה" - חל רק על ברייקים בתוך 3 דק' מתחילת התוכנית
+    for chan in programs_by_channel:
+        programs_by_channel[chan] = adjust_start_by_opening_break(
+            programs_by_channel[chan],
+            breaks_by_channel.get(chan, []),
+        )
 
     if not skip_backup:
         print(f"\n[גיבוי] יוצר גיבוי לקובץ היעד...")

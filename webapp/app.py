@@ -96,6 +96,13 @@ def hhmm_to_td(s):
 def process_files(source_path, target_path):
     """מריץ את הפייפליין של update_luach ומחזיר את הנתונים כמילון של DataFrames."""
     programs_by_channel = U.read_programs_from_source(source_path)
+    # כלל "התחלה אחרי ברייק פתיחה" - חל רק על ברייקים בתוך 3 דק' מתחילת התוכנית
+    breaks_by_channel = U.read_breaks_from_source(source_path)
+    for chan in programs_by_channel:
+        programs_by_channel[chan] = U.adjust_start_by_opening_break(
+            programs_by_channel[chan],
+            breaks_by_channel.get(chan, []),
+        )
     # בונה DataFrames לתצוגה
     dfs = {}
     for chan, programs in programs_by_channel.items():
