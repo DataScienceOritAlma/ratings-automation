@@ -143,6 +143,8 @@ NAME_SHORTCUTS = {
     "מאסטר שף נבחרת החלומות":                    "מאסטר שף",
     "הקומה ה-12":                                "הקומה ה 12",
     "דוח מצב עם עמליה ועופר":                    "דוח מצב",
+    "דוח מצב עם ירון אברהם ועינב גל":            "דוח מצב",
+    "מה באמת קרה שם? עם ארז טל":                 "מה באמת קרה שם?",
     "12 בצוהריים":                              "משדר צהריים",
     "מהדורת היום עם עמליה ועופר":                "מהדורת היום",
     "חמש עם רפי רשף":                           "חמש עם",
@@ -266,8 +268,9 @@ def clean_program_name(name):
         s = re.sub(r'\s+\d{1,2}\.\d{1,2}(\s+\d+)*\s*$', '', s)
         # (7ב) הסרת מספרי אירוע/עונה בסוף: " 25-26 514", " 2026", " 66"
         s = re.sub(r'\s+\d+([-/]\d+)*(\s+\d+)*\s*$', '', s)
-        # (8) הסרת " - X" בסוף כשה-X קצר (סימן שהשם נחתך)
-        s = re.sub(r'\s*[-–]\s*\S{1,3}\s*$', '', s)
+        # (8) הסרת " - X" בסוף כשה-X קצר (סימן שהשם נחתך).
+        # דורש רווח לפני המקף (כדי לא לפגוע ב-'הקומה ה-12' או 'קלמן-ליברמן')
+        s = re.sub(r'\s+[-–]\s*\S{1,3}\s*$', '', s)
         # (9) ניקוי מקפים/פסיקים/סוגריים בסוף
         s = re.sub(r'[\s,(\-–]+$', '', s)
         if s == prev:
@@ -895,6 +898,55 @@ def read_programs_from_source(source_path):
               f"אוחדו {n_consolidated} חוזרים + {n_merged} כפילויות)")
 
     return channels
+
+
+# פרמטרים לכלל "התחלה אחרי ברייק פתיחה"
+OPENING_BREAK_MIN_MINUTES = 5   # ברייק פחות מזה - לא נחשב "פתיחה משמעותית"
+OPENING_BREAK_WINDOW_MIN = 15   # מחפשים ברייק פתיחה רק ב-15 הדק' הראשונות של התוכנית
+OPENING_BREAK_TOLERANCE_MIN = 2 # מרווח סבילות אם הברייק מתחיל דקה-שתיים לפני התוכנית (עיגול)
+
+
+def adjust_start_by_opening_break(programs, breaks):
+    """
+    מזיז שעת התחלה של תוכנית ל'אחרי ברייק פתיחה' + 1 דקה,
+    אם יש ברייק בתחילת התוכנית שנמשך 5+ דקות.
+
+    דוגמה: שבע עם קרן מרציאנו במקור 18:58, ברייק פתיחה 19:00-19:08 (8 דק')
+      -> שעת התחלה נדחית ל-19:09.
+
+    לא נוגע בתוכנית אם אין ברייק פתיחה שמתאים לתנאים.
+    """
+    if not breaks:
+        return programs
+    tolerance = timedelta(minutes=OPENING_BREAK_TOLERANCE_MIN)
+    window = timedelta(minutes=OPENING_BREAK_WINDOW_MIN)
+    min_break = timedelta(minutes=OPENING_BREAK_MIN_MINUTES)
+
+    result = []
+    for start, end, name in programs:
+        if start is None:
+            result.append((start, end, name))
+            continue
+        window_end = start + window
+        best_break_end = None
+        for b_start, b_end in breaks:
+            if b_start is None or b_end is None:
+                continue
+            # הברייק צריך להתחיל בתוך חלון הפתיחה של התוכנית
+            if b_start < start - tolerance or b_start > window_end:
+                continue
+            duration = b_end - b_start
+            if duration < min_break:
+                continue
+            if best_break_end is None or b_end > best_break_end:
+                best_break_end = b_end
+        if best_break_end is not None:
+            new_start = best_break_end + timedelta(minutes=1)
+            if new_start > start:
+                start = new_start
+                # אם הסיום כעת לפני ההתחלה - זה מקרה קצה, לא נוגעים בסיום
+        result.append((start, end, name))
+    return result
 
 
 def clear_channel_columns(ws, cols, max_row):
