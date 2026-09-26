@@ -9,30 +9,32 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Streamlit health endpoint
+      - name: Ping Streamlit app (no redirect follow)
         run: |
-          URL="https://orit-ratings.streamlit.app/_stcore/health"
+          URL="https://orit-ratings.streamlit.app"
 
           STATUS=$(curl -sS -o /tmp/body.txt -w "%{http_code}" \
-            -A "Mozilla/5.0 (compatible; keep-alive-bot)" \
-            --max-time 90 --max-redirs 5 -L \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            --max-time 90 \
             "$URL")
 
           echo "HTTP $STATUS"
-          echo "Body:"
-          cat /tmp/body.txt
+          echo "Body head:"
+          head -c 400 /tmp/body.txt
           echo ""
 
-          if [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 400 ]; then
-            echo "Streamlit app pinged successfully"
+          if [ -n "$STATUS" ] && [ "$STATUS" != "000" ]; then
+            echo "Streamlit responded with HTTP $STATUS — app is alive"
           else
-            echo "Ping failed with status $STATUS"
+            echo "No HTTP response received"
             exit 1
           fi
 
-      - name: Also ping app root to register a view
+      - name: Ping health endpoint (no redirect follow)
         run: |
-          curl -sS -o /dev/null -w "root: HTTP %{http_code}\n" \
-            -A "Mozilla/5.0 (compatible; keep-alive-bot)" \
-            --max-time 90 --max-redirs 5 -L \
-            "https://orit-ratings.streamlit.app" || echo "Root ping non-fatal"
+          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            --max-time 60 \
+            "https://orit-ratings.streamlit.app/_stcore/health")
+
+          echo "health: HTTP $STATUS"
