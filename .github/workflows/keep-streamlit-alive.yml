@@ -9,18 +9,18 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Streamlit app to prevent auto-sleep
+      - name: Ping Streamlit health endpoint
         run: |
-          URL="https://orit-ratings.streamlit.app"
+          URL="https://orit-ratings.streamlit.app/_stcore/health"
 
-          STATUS=$(curl -sS -o /tmp/body.html -w "%{http_code}" \
+          STATUS=$(curl -sS -o /tmp/body.txt -w "%{http_code}" \
             -A "Mozilla/5.0 (compatible; keep-alive-bot)" \
-            -L --max-time 60 \
+            --max-time 90 --max-redirs 5 -L \
             "$URL")
 
           echo "HTTP $STATUS"
-          echo "Body head:"
-          head -c 800 /tmp/body.html
+          echo "Body:"
+          cat /tmp/body.txt
           echo ""
 
           if [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 400 ]; then
@@ -29,3 +29,10 @@ jobs:
             echo "Ping failed with status $STATUS"
             exit 1
           fi
+
+      - name: Also ping app root to register a view
+        run: |
+          curl -sS -o /dev/null -w "root: HTTP %{http_code}\n" \
+            -A "Mozilla/5.0 (compatible; keep-alive-bot)" \
+            --max-time 90 --max-redirs 5 -L \
+            "https://orit-ratings.streamlit.app" || echo "Root ping non-fatal"
